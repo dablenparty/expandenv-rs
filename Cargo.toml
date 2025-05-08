@@ -1,7 +1,11 @@
 [package]
-name = "custom_shellexpand"
+name = "expandenv"
 version = "0.1.0"
 edition = "2024"
+license = "0BSD"
+description = "A Rust crate focused on expanding environment variables."
+repository = "https://github.com/dablenparty/expandenv-rs"
+readme = "README.md"
 
 [dependencies]
 anyhow = "1.0.98"
