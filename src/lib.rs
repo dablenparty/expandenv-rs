@@ -1,4 +1,54 @@
 #![warn(clippy::all, clippy::pedantic)]
+/*!
+This crate is for expanding environment variables and tilde's (`~`) with support for fallback
+values.
+
+## Examples
+
+```rust
+# use anyhow::{self, Context};
+# use directories_next;
+# use std::path::PathBuf;
+# use expandenv::expand;
+#
+# fn main() -> anyhow::Result<()> {
+# const TEST_ENVVAR_KEY: &str = "FOO";
+# const TEST_ENVVAR_VALUE: &str = "bar";
+#
+# let test_envvar_value = unsafe {
+#     std::env::set_var(TEST_ENVVAR_KEY, TEST_ENVVAR_VALUE);
+#     let value = std::env::var(TEST_ENVVAR_KEY).context("failed to set test envvar")?;
+#     assert_eq!(
+#         TEST_ENVVAR_VALUE, value,
+#         "failed to set {TEST_ENVVAR_KEY}={TEST_ENVVAR_VALUE}, got '{value}' instead."
+#     );
+#
+#     std::path::PathBuf::from(value)
+# };
+#
+// expand a variable
+let envvar_value = expand("$FOO")?;
+# assert_eq!(test_envvar_value, envvar_value);
+
+// return an error if it fails
+assert!(expand("$MISSING_VAR").is_err());
+
+// or expand a fallback on failure
+let envvar_value = expand("${MISSING_VAR:-$FOO}")?;
+# assert_eq!(test_envvar_value, envvar_value);
+
+// you can even expand an entire path!
+// the `~` expands to your home directory
+let path = expand("~/${MISSING_VAR:-$FOO}/file.txt")?;
+# let base_dirs = directories_next::BaseDirs::new().context("failed to find home dir")?;
+# let home = base_dirs.home_dir();
+# assert_eq!(home.join(TEST_ENVVAR_VALUE).join("file.txt"), path);
+#
+# Ok(())
+# }
+```
+
+*/
 
 use std::{
     collections::VecDeque,
@@ -209,7 +259,7 @@ mod tests {
         const TEST_ENVVAR_VALUE: &str = "test_value";
 
         let test_envvar_value = unsafe {
-            std::env::set_var(TEST_ENVVAR_KEY, "test_value");
+            std::env::set_var(TEST_ENVVAR_KEY, TEST_ENVVAR_VALUE);
             let value = std::env::var(TEST_ENVVAR_KEY).context("failed to set test envvar")?;
             assert_eq!(
                 TEST_ENVVAR_VALUE, value,
