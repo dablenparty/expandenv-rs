@@ -126,7 +126,7 @@ fn __parse_path_components_with_braces(s: &str) -> Vec<OsString> {
 ///
 /// - An envvar cannot be expanded
 /// - You don't have a home directory
-pub fn expand(s: &str) -> Result<PathBuf, ExpandError> {
+pub fn expand<S: AsRef<str>>(s: S) -> Result<PathBuf, ExpandError> {
     /// Lazy wrapper around [`directories_next::BaseDirs::new`].
     static BASE_DIRS: LazyLock<BaseDirs> =
         LazyLock::new(|| BaseDirs::new().expect("failed to locate users home directory"));
@@ -149,6 +149,7 @@ pub fn expand(s: &str) -> Result<PathBuf, ExpandError> {
         Regex::new(r"\$\{?([a-zA-Z_]\w*)(:-(.*?))?\}?$").expect("invalid envvar regex")
     });
 
+    let s = s.as_ref();
     let comp_strs = __parse_path_components_with_braces(s);
     let mut expanded_comps = VecDeque::with_capacity(comp_strs.len());
 
