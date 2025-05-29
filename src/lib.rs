@@ -94,10 +94,10 @@ fn __parse_path_components_with_braces(s: &str) -> Vec<OsString> {
             '}' if comp_is_envvar => brace_depth = brace_depth.saturating_sub(1),
 
             _ => {}
-        }
+        } // match c
 
         comp.push(c.to_string());
-    }
+    } // for c in char_iter
 
     components.push(comp.clone());
 
@@ -180,9 +180,9 @@ pub fn expand(s: &str) -> Result<PathBuf, ExpandError> {
             PathBuf::from(envvar_value)
         } else {
             PathBuf::from(comp)
-        };
+        }; // if let Some(captures) = ...
         expanded_comps.extend(path.components().map(|c| c.as_os_str().to_os_string()));
-    }
+    } // for comp in comp_strs
 
     #[cfg(debug_assertions)]
     println!("comps={expanded_comps:?}");
