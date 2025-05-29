@@ -200,11 +200,30 @@ mod tests {
 
     use super::*;
 
+    const TEST_ENVVAR_KEY: &str = "__SHELLEXPAND_TEST_ENVVAR";
+    const TEST_ENVVAR_VALUE: &str = "test_value";
+
+    fn set_test_envvar() -> anyhow::Result<String> {
+        let test_envvar_value = unsafe {
+            std::env::set_var(TEST_ENVVAR_KEY, TEST_ENVVAR_VALUE);
+            let value = std::env::var(TEST_ENVVAR_KEY)
+                .context("failed to get test envvar after setting")?;
+            assert_eq!(
+                TEST_ENVVAR_VALUE, value,
+                "failed to set {TEST_ENVVAR_KEY}={TEST_ENVVAR_VALUE}, got '{value}' instead."
+            );
+
+            value
+        };
+
+        Ok(test_envvar_value)
+    }
+
     #[test]
     fn test_fails_to_expand_non_existent_envvar() {
         const TEST_ENVVAR: &str = "NO_WAY_YOU_HAVE_DEFINED_THIS";
 
-        match expand(&format!("${TEST_ENVVAR}/some/file")) {
+        match expand(format!("${TEST_ENVVAR}/some/file")) {
             Err(ExpandError::EnvvarReadError(envvar)) => assert_eq!(envvar, TEST_ENVVAR),
             res => panic!("expected error, got {res:?}"),
         }
@@ -239,9 +258,9 @@ mod tests {
 
     #[test]
     fn test_expand_envvar() -> anyhow::Result<()> {
-        let home = std::env::var("HOME").context("failed to get home dir")?;
-        let expected = PathBuf::from(format!("{home}/some/file"));
-        let actual = expand("$HOME/some/file")?;
+        set_test_envvar().context("failed to set test envvar")?;
+        let expected = PathBuf::from(format!("{TEST_ENVVAR_VALUE}/some/file"));
+        let actual = expand(format!("${TEST_ENVVAR_KEY}/some/file"))?;
 
         assert_eq!(expected, actual);
 
@@ -250,22 +269,10 @@ mod tests {
 
     #[test]
     fn test_expand_envvar_in_middle() -> anyhow::Result<()> {
-        const TEST_ENVVAR_KEY: &str = "__SHELLEXPAND_TEST_ENVVAR";
-        const TEST_ENVVAR_VALUE: &str = "test_value";
+        set_test_envvar().context("failed to set test envvar")?;
 
-        let test_envvar_value = unsafe {
-            std::env::set_var(TEST_ENVVAR_KEY, TEST_ENVVAR_VALUE);
-            let value = std::env::var(TEST_ENVVAR_KEY).context("failed to set test envvar")?;
-            assert_eq!(
-                TEST_ENVVAR_VALUE, value,
-                "failed to set {TEST_ENVVAR_KEY}={TEST_ENVVAR_VALUE}, got '{value}' instead."
-            );
-
-            value
-        };
-
-        let expected = PathBuf::from(format!("/path/to/{test_envvar_value}/some/file"));
-        let actual = expand(&format!("/path/to/${TEST_ENVVAR_KEY}/some/file"))?;
+        let expected = PathBuf::from(format!("/path/to/{TEST_ENVVAR_VALUE}/some/file"));
+        let actual = expand(format!("/path/to/${TEST_ENVVAR_KEY}/some/file"))?;
 
         assert_eq!(expected, actual);
 
@@ -274,9 +281,9 @@ mod tests {
 
     #[test]
     fn test_expand_envvar_with_braces() -> anyhow::Result<()> {
-        let home = std::env::var("HOME").context("failed to get home dir")?;
-        let expected = PathBuf::from(format!("{home}/some/file"));
-        let actual = expand("${HOME}/some/file")?;
+        set_test_envvar().context("failed to set test envvar")?;
+        let expected = PathBuf::from(format!("{TEST_ENVVAR_VALUE}/some/file"));
+        let actual = expand(format!("${{{TEST_ENVVAR_KEY}}}/some/file"))?;
 
         assert_eq!(expected, actual);
 
@@ -285,9 +292,11 @@ mod tests {
 
     #[test]
     fn test_expand_fallback_envvar() -> anyhow::Result<()> {
-        let home = std::env::var("HOME").context("failed to get home dir")?;
-        let expected = PathBuf::from(format!("{home}/some/file"));
-        let actual = expand("${NO_WAY_YOU_HAVE_DEFINED_THIS:-$HOME}/some/file")?;
+        set_test_envvar().context("failed to set test envvar")?;
+        let expected = PathBuf::from(format!("{TEST_ENVVAR_VALUE}/some/file"));
+        let actual = expand(format!(
+            "${{NO_WAY_YOU_HAVE_DEFINED_THIS:-${TEST_ENVVAR_KEY}}}/some/file"
+        ))?;
 
         assert_eq!(expected, actual);
 
@@ -296,10 +305,12 @@ mod tests {
 
     #[test]
     fn test_expand_nested_fallback_envvars() -> anyhow::Result<()> {
-        let home = std::env::var("HOME").context("failed to get home dir")?;
-        let expected = PathBuf::from(format!("{home}/some/file"));
+        set_test_envvar().context("failed to set test envvar")?;
+        let expected = PathBuf::from(format!("{TEST_ENVVAR_VALUE}/some/file"));
         // braces are important! otherwise, it's ambiguous
-        let actual = expand("${MISSING1:-${MISSING2:-${MISSING3:-$HOME}}}/some/file")?;
+        let actual = expand(format!(
+            "${{MISSING1:-${{MISSING2:-${{MISSING3:-${TEST_ENVVAR_KEY}}}}}}}/some/file"
+        ))?;
 
         assert_eq!(expected, actual);
 
@@ -318,7 +329,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fallback_has_path_components() -> anyhow::Result<()> {
+    fn test_fallback_has_tilde_components() -> anyhow::Result<()> {
         let home = std::env::var("HOME").context("failed to get home dir")?;
         let expected = PathBuf::from(format!("{home}/some/file"));
 
