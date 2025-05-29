@@ -26,19 +26,21 @@ values.
 #     std::path::PathBuf::from(value)
 # };
 #
-// expand a variable
+// when you expand a variable, it returns the value
 let envvar_value = expand("$FOO")?;
 # assert_eq!(test_envvar_value, envvar_value);
 
-// return an error if it fails
+// if expansion fails, you can return an error...
 assert!(expand("$MISSING_VAR").is_err());
-
-// or expand a fallback on failure
-let envvar_value = expand("${MISSING_VAR:-$FOO}")?;
+// or try to parse a fallback value
+let envvar_value = expand("${MISSING_VAR:-/some/path}")?;
+# assert_eq!(PathBuf::from("/some/path"), envvar_value);
+// and nest them as much as you want! this example returns the value of `$FOO`
+let envvar_value = expand("${MISSING_VAR:-${ANOTHER_MISSING_VAR:-$FOO}}")?;
 # assert_eq!(test_envvar_value, envvar_value);
 
-// you can even expand an entire path!
-// the `~` expands to your home directory
+// it's not limited; you can expand an entire path!
+// the `~` expands to your home directory for simplicity
 let path = expand("~/${MISSING_VAR:-$FOO}/file.txt")?;
 # let base_dirs = directories_next::BaseDirs::new().context("failed to find home dir")?;
 # let home = base_dirs.home_dir();
@@ -47,7 +49,6 @@ let path = expand("~/${MISSING_VAR:-$FOO}/file.txt")?;
 # Ok(())
 # }
 ```
-
 */
 
 use std::{
