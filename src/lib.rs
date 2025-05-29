@@ -132,13 +132,6 @@ pub fn expand<S: AsRef<str>>(s: S) -> Result<PathBuf, ExpandError> {
         LazyLock::new(|| BaseDirs::new().expect("failed to locate users home directory"));
     static ENVVAR_REGEX: LazyLock<Regex> = LazyLock::new(|| {
         /*
-         * TODO: put examples into doctests
-         * Example matches:
-         * 1. $ENV_VAR
-         * 2. ${ENV_VAR}
-         * 3. ${MISSING_VAR:-$ENV_VAR}
-         * 4. ${MISSING_VAR:-~/path/to/file}
-         *
          * There are three capture groups:
          * 1. The environment variable (minus the $)
          *    ([\w_][\w\d_]*)
