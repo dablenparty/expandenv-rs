@@ -33,8 +33,8 @@ let envvar_value = expand("$FOO")?;
 // if expansion fails, you can return an error...
 assert!(expand("$MISSING_VAR").is_err());
 // or try to parse a fallback value
-let envvar_value = expand("${MISSING_VAR:-/some/path}")?;
-# assert_eq!(PathBuf::from("/some/path"), envvar_value);
+let envvar_value = expand("${MISSING_VAR:-some/path}")?;
+# assert_eq!(PathBuf::from("some/path"), envvar_value);
 // and nest them as much as you want! this example returns the value of `$FOO`
 let envvar_value = expand("${MISSING_VAR:-${ANOTHER_MISSING_VAR:-$FOO}}")?;
 # assert_eq!(test_envvar_value, envvar_value);
@@ -150,7 +150,7 @@ pub fn expand<S: AsRef<str>>(s: S) -> Result<PathBuf, ExpandError> {
     let mut expanded_comps = VecDeque::with_capacity(comp_strs.len());
 
     for comp in comp_strs {
-        let path = if let Some(captures) = ENVVAR_REGEX.captures(&dbg!(&comp).to_string_lossy()) {
+        let path = if let Some(captures) = ENVVAR_REGEX.captures(&comp.to_string_lossy()) {
             let envvar = captures
                 .get(1)
                 .and_then(|m| if m.is_empty() { None } else { Some(m.as_str()) })
@@ -194,7 +194,10 @@ pub fn expand<S: AsRef<str>>(s: S) -> Result<PathBuf, ExpandError> {
         }
     }
 
-    Ok(PathBuf::from_iter(expanded_comps))
+    // WARN: there is currently a bug with [`PathBuf::from_iter`] where, for whatever reason, it combines the first two components into one.
+    // Converting to a string seems to work fine for now.
+    let path_str = expanded_comps.into_iter().collect::<Vec<_>>().join(OsStr::new(std::path::MAIN_SEPARATOR_STR));
+    Ok(PathBuf::from(path_str))
 }
 
 #[cfg(test)]
@@ -265,6 +268,17 @@ mod tests {
     }
 
     #[test]
+    fn test_expand_absolute_path() -> anyhow::Result<()> {
+        let home = BASE_DIRS.home_dir();
+        let expected = home.join("path").join("to").join("file");
+        let actual = expand(expected.to_string_lossy())?;
+
+        assert_eq!(expected, actual);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_expand_envvar() -> anyhow::Result<()> {
         set_test_envvar().context("failed to set test envvar")?;
         let expected = PathBuf::from(format!("{TEST_ENVVAR_VALUE}/some/file"));
@@ -279,8 +293,8 @@ mod tests {
     fn test_expand_envvar_in_middle() -> anyhow::Result<()> {
         set_test_envvar().context("failed to set test envvar")?;
 
-        let expected = PathBuf::from(format!("/path/to/{TEST_ENVVAR_VALUE}/some/file"));
-        let actual = expand(format!("/path/to/${TEST_ENVVAR_KEY}/some/file"))?;
+        let expected = PathBuf::from(format!("path/to/{TEST_ENVVAR_VALUE}/some/file"));
+        let actual = expand(format!("path/to/${TEST_ENVVAR_KEY}/some/file"))?;
 
         assert_eq!(expected, actual);
 
