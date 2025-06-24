@@ -65,6 +65,10 @@ use crate::errors::ExpandError;
 
 pub mod errors;
 
+/// Lazy wrapper around [`directories_next::BaseDirs::new`].
+static BASE_DIRS: LazyLock<BaseDirs> =
+    LazyLock::new(|| BaseDirs::new().expect("failed to locate users home directory"));
+
 /// Mimic's the behavior of [`PathBuf::components`] while respecting curly braces.
 fn __parse_path_components_with_braces(s: &str) -> Vec<OsString> {
     let mut brace_depth: u8 = 0;
@@ -127,9 +131,6 @@ fn __parse_path_components_with_braces(s: &str) -> Vec<OsString> {
 /// - An envvar cannot be expanded
 /// - You don't have a home directory
 pub fn expand<S: AsRef<str>>(s: S) -> Result<PathBuf, ExpandError> {
-    /// Lazy wrapper around [`directories_next::BaseDirs::new`].
-    static BASE_DIRS: LazyLock<BaseDirs> =
-        LazyLock::new(|| BaseDirs::new().expect("failed to locate users home directory"));
     static ENVVAR_REGEX: LazyLock<Regex> = LazyLock::new(|| {
         /*
          * There are three capture groups:
@@ -143,11 +144,13 @@ pub fn expand<S: AsRef<str>>(s: S) -> Result<PathBuf, ExpandError> {
     });
 
     let s = s.as_ref();
+    #[cfg(windows)]
+    let s = &s.replace('/', "\\");
     let comp_strs = __parse_path_components_with_braces(s);
     let mut expanded_comps = VecDeque::with_capacity(comp_strs.len());
 
     for comp in comp_strs {
-        let path = if let Some(captures) = ENVVAR_REGEX.captures(&comp.to_string_lossy()) {
+        let path = if let Some(captures) = ENVVAR_REGEX.captures(&dbg!(&comp).to_string_lossy()) {
             let envvar = captures
                 .get(1)
                 .and_then(|m| if m.is_empty() { None } else { Some(m.as_str()) })
@@ -158,7 +161,7 @@ pub fn expand<S: AsRef<str>>(s: S) -> Result<PathBuf, ExpandError> {
 
             let envvar_value = if let Some(value) = std::env::var_os(envvar) {
                 #[cfg(debug_assertions)]
-                println!("{envvar:?}={value:?}");
+                println!("{envvar:?}={}", value.display());
 
                 value
             } else if let Some(fallback) = captures.get(3) {
@@ -231,8 +234,12 @@ mod tests {
 
     #[test]
     fn test_parses_path_with_braces() {
+        #[cfg(windows)]
+        let expected = vec!["${within\\braces}", "file"];
+        #[cfg(not(windows))]
         let expected = vec!["${within/braces}", "file"];
-        let actual = __parse_path_components_with_braces("${within/braces}/file");
+        let path = expected.join(std::path::MAIN_SEPARATOR_STR);
+        let actual = __parse_path_components_with_braces(&path);
 
         assert_eq!(expected, actual);
     }
@@ -240,15 +247,16 @@ mod tests {
     #[test]
     fn test_parses_path_with_braces_but_no_dollar_sign() {
         let expected = vec!["{within", "braces}", "file"];
-        let actual = __parse_path_components_with_braces("{within/braces}/file");
+        let path = expected.join(std::path::MAIN_SEPARATOR_STR);
+        let actual = __parse_path_components_with_braces(&path);
 
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn test_expand_tilde() -> anyhow::Result<()> {
-        let home = std::env::var("HOME").context("failed to get home dir")?;
-        let expected = PathBuf::from(format!("{home}/path/to/file"));
+        let home = BASE_DIRS.home_dir();
+        let expected = home.join("path").join("to").join("file");
         let actual = expand("~/path/to/file")?;
 
         assert_eq!(expected, actual);
@@ -319,8 +327,8 @@ mod tests {
 
     #[test]
     fn test_expand_fallback_tilde() -> anyhow::Result<()> {
-        let home = std::env::var("HOME").context("failed to get home dir")?;
-        let expected = PathBuf::from(format!("{home}/some/file"));
+        let home = BASE_DIRS.home_dir();
+        let expected = home.join("some").join("file");
         let actual = expand("${NO_WAY_YOU_HAVE_DEFINED_THIS:-~}/some/file")?;
 
         assert_eq!(expected, actual);
@@ -330,8 +338,8 @@ mod tests {
 
     #[test]
     fn test_fallback_has_tilde_components() -> anyhow::Result<()> {
-        let home = std::env::var("HOME").context("failed to get home dir")?;
-        let expected = PathBuf::from(format!("{home}/some/file"));
+        let home = BASE_DIRS.home_dir();
+        let expected = home.join(home).join("some").join("file");
 
         let actual = expand("${NO_WAY_YOU_HAVE_DEFINED_THIS:-~/some}/file")?;
 
