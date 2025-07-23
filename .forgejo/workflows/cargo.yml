@@ -28,7 +28,7 @@ jobs:
     - uses: actions/checkout@v4
     - name: Fetch dependencies
       run: |
-        cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+        cargo fetch --target "$(rustc -vV | sed -n 's/host: //p')"
     - name: Build
       run: cargo build ${{ matrix.cargo-args }} --all-features --frozen --verbose --workspace
     - name: Run tests
