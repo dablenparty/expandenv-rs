@@ -1,0 +1,36 @@
+name: Build and Test with Cargo
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.forgejo/**/*.yml'
+      - '**/*.rs'
+      - '**/Cargo.toml'
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-and-test:
+    runs-on: docker
+    strategy:
+      matrix:
+        cargo-args: ['--release', '']
+
+    container:
+      image: cimg/rust:1.88-node
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Fetch dependencies
+      run: |
+        cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+    - name: Build
+      run: cargo build ${{ matrix.cargo-args }} --all-features --frozen --verbose --workspace
+    - name: Run tests
+      run: cargo test ${{ matrix.cargo-args }} --all-features --frozen --verbose --workspace
+
