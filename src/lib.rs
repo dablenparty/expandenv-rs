@@ -9,7 +9,7 @@ values.
 # use anyhow::{self, Context};
 # use directories_next;
 # use std::path::PathBuf;
-# use expandenv::expand;
+# use expandenv::expand_by_path_components;
 #
 # fn main() -> anyhow::Result<()> {
 # const TEST_ENVVAR_KEY: &str = "FOO";
@@ -27,21 +27,21 @@ values.
 # };
 #
 // when you expand a variable, it returns the value
-let envvar_value = expand("$FOO")?;
+let envvar_value = expand_by_path_components("$FOO")?;
 # assert_eq!(test_envvar_value, envvar_value);
 
 // if expansion fails, you can return an error...
-assert!(expand("$MISSING_VAR").is_err());
+assert!(expand_by_path_components("$MISSING_VAR").is_err());
 // or try to parse a fallback value
-let envvar_value = expand("${MISSING_VAR:-some/path}")?;
+let envvar_value = expand_by_path_components("${MISSING_VAR:-some/path}")?;
 # assert_eq!(PathBuf::from("some/path"), envvar_value);
 // and nest them as much as you want! this example returns the value of `$FOO`
-let envvar_value = expand("${MISSING_VAR:-${ANOTHER_MISSING_VAR:-$FOO}}")?;
+let envvar_value = expand_by_path_components("${MISSING_VAR:-${ANOTHER_MISSING_VAR:-$FOO}}")?;
 # assert_eq!(test_envvar_value, envvar_value);
 
 // it's not limited; you can expand an entire path!
 // the `~` expands to your home directory for simplicity
-let path = expand("~/${MISSING_VAR:-$FOO}/file.txt")?;
+let path = expand_by_path_components("~/${MISSING_VAR:-$FOO}/file.txt")?;
 # let base_dirs = directories_next::BaseDirs::new().context("failed to find home dir")?;
 # let home = base_dirs.home_dir();
 # assert_eq!(home.join(TEST_ENVVAR_VALUE).join("file.txt"), path);
@@ -130,7 +130,7 @@ fn __parse_path_components_with_braces(s: &str) -> Vec<OsString> {
 ///
 /// - An envvar cannot be expanded
 /// - You don't have a home directory
-pub fn expand<S: AsRef<str>>(s: S) -> Result<PathBuf, ExpandError> {
+pub fn expand_by_path_components<S: AsRef<str>>(s: S) -> Result<PathBuf, ExpandError> {
     static ENVVAR_REGEX: LazyLock<Regex> = LazyLock::new(|| {
         /*
          * There are three capture groups:
@@ -169,7 +169,7 @@ pub fn expand<S: AsRef<str>>(s: S) -> Result<PathBuf, ExpandError> {
                 #[cfg(debug_assertions)]
                 println!("failed to expand '{envvar:?}', found fallback '{fallback:?}'");
 
-                expand(fallback)?.into_os_string()
+                expand_by_path_components(fallback)?.into_os_string()
             } else {
                 return Err(ExpandError::EnvvarReadError(envvar.to_string()));
             };
@@ -232,7 +232,7 @@ mod tests {
     fn test_fails_to_expand_non_existent_envvar() {
         const TEST_ENVVAR: &str = "NO_WAY_YOU_HAVE_DEFINED_THIS";
 
-        match expand(format!("${TEST_ENVVAR}/some/file")) {
+        match expand_by_path_components(format!("${TEST_ENVVAR}/some/file")) {
             Err(ExpandError::EnvvarReadError(envvar)) => assert_eq!(envvar, TEST_ENVVAR),
             res => panic!("expected error, got {res:?}"),
         }
@@ -263,7 +263,7 @@ mod tests {
     fn test_expand_tilde() -> anyhow::Result<()> {
         let home = BASE_DIRS.home_dir();
         let expected = home.join("path").join("to").join("file");
-        let actual = expand("~/path/to/file")?;
+        let actual = expand_by_path_components("~/path/to/file")?;
 
         assert_eq!(expected, actual);
 
@@ -274,7 +274,7 @@ mod tests {
     fn test_expand_absolute_path() -> anyhow::Result<()> {
         let home = BASE_DIRS.home_dir();
         let expected = home.join("path").join("to").join("file");
-        let actual = expand(expected.to_string_lossy())?;
+        let actual = expand_by_path_components(expected.to_string_lossy())?;
 
         assert_eq!(expected, actual);
 
@@ -285,7 +285,7 @@ mod tests {
     fn test_expand_envvar() -> anyhow::Result<()> {
         set_test_envvar().context("failed to set test envvar")?;
         let expected = PathBuf::from(format!("{TEST_ENVVAR_VALUE}/some/file"));
-        let actual = expand(format!("${TEST_ENVVAR_KEY}/some/file"))?;
+        let actual = expand_by_path_components(format!("${TEST_ENVVAR_KEY}/some/file"))?;
 
         assert_eq!(expected, actual);
 
@@ -297,7 +297,7 @@ mod tests {
         set_test_envvar().context("failed to set test envvar")?;
 
         let expected = PathBuf::from(format!("path/to/{TEST_ENVVAR_VALUE}/some/file"));
-        let actual = expand(format!("path/to/${TEST_ENVVAR_KEY}/some/file"))?;
+        let actual = expand_by_path_components(format!("path/to/${TEST_ENVVAR_KEY}/some/file"))?;
 
         assert_eq!(expected, actual);
 
@@ -308,7 +308,7 @@ mod tests {
     fn test_expand_envvar_with_braces() -> anyhow::Result<()> {
         set_test_envvar().context("failed to set test envvar")?;
         let expected = PathBuf::from(format!("{TEST_ENVVAR_VALUE}/some/file"));
-        let actual = expand(format!("${{{TEST_ENVVAR_KEY}}}/some/file"))?;
+        let actual = expand_by_path_components(format!("${{{TEST_ENVVAR_KEY}}}/some/file"))?;
 
         assert_eq!(expected, actual);
 
@@ -319,7 +319,7 @@ mod tests {
     fn test_expand_fallback_envvar() -> anyhow::Result<()> {
         set_test_envvar().context("failed to set test envvar")?;
         let expected = PathBuf::from(format!("{TEST_ENVVAR_VALUE}/some/file"));
-        let actual = expand(format!(
+        let actual = expand_by_path_components(format!(
             "${{NO_WAY_YOU_HAVE_DEFINED_THIS:-${TEST_ENVVAR_KEY}}}/some/file"
         ))?;
 
@@ -333,7 +333,7 @@ mod tests {
         set_test_envvar().context("failed to set test envvar")?;
         let expected = PathBuf::from(format!("{TEST_ENVVAR_VALUE}/some/file"));
         // braces are important! otherwise, it's ambiguous
-        let actual = expand(format!(
+        let actual = expand_by_path_components(format!(
             "${{MISSING1:-${{MISSING2:-${{MISSING3:-${TEST_ENVVAR_KEY}}}}}}}/some/file"
         ))?;
 
@@ -346,7 +346,7 @@ mod tests {
     fn test_expand_fallback_tilde() -> anyhow::Result<()> {
         let home = BASE_DIRS.home_dir();
         let expected = home.join("some").join("file");
-        let actual = expand("${NO_WAY_YOU_HAVE_DEFINED_THIS:-~}/some/file")?;
+        let actual = expand_by_path_components("${NO_WAY_YOU_HAVE_DEFINED_THIS:-~}/some/file")?;
 
         assert_eq!(expected, actual);
 
@@ -358,7 +358,7 @@ mod tests {
         let home = BASE_DIRS.home_dir();
         let expected = home.join(home).join("some").join("file");
 
-        let actual = expand("${NO_WAY_YOU_HAVE_DEFINED_THIS:-~/some}/file")?;
+        let actual = expand_by_path_components("${NO_WAY_YOU_HAVE_DEFINED_THIS:-~/some}/file")?;
 
         assert_eq!(expected, actual);
 
