@@ -108,6 +108,70 @@ fn __parse_path_components_with_braces(s: &str) -> Vec<OsString> {
     components
 }
 
+pub fn expand<S: ToString + ?Sized>(s: &S) -> Result<String, ExpandError> {
+    static ENVVAR_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+        /*
+         * There are three capture groups:
+         * 1. The environment variable (minus the $)
+         *    ([\w_][\w\d_]*)
+         * 2. Ignore this group
+         * 3. The fallback value
+         *    (.*?)
+         */
+        Regex::new(r"\$\{?([a-zA-Z_]\w*)(:-(.*?))?\}?").expect("invalid envvar regex")
+    });
+
+    let s = s.to_string();
+    #[cfg(windows)]
+    let s = s.replace('/', "\\");
+    let mut expanded = s.clone();
+    let mut total_offset: isize = 0;
+
+    for capture in ENVVAR_REGEX.captures_iter(&s) {
+        let full_match = capture.get_match();
+        let mtch = capture
+            .get(1)
+            .and_then(|m| if m.is_empty() { None } else { Some(m) })
+            .ok_or(ExpandError::EmptyEnvvarCapture)?;
+        let envvar = mtch.as_str();
+
+        #[cfg(debug_assertions)]
+        println!("expanding envvar '{envvar:?}'");
+
+        let envvar_value = if let Some(value) = std::env::var_os(envvar) {
+            #[cfg(debug_assertions)]
+            println!("{envvar:?}={}", value.display());
+
+            value.to_string_lossy().to_string()
+        } else if let Some(fallback) = capture.get(3) {
+            let fallback = fallback.as_str();
+            #[cfg(debug_assertions)]
+            println!("failed to expand '{envvar:?}', found fallback '{fallback:?}'");
+
+            expand(fallback)?
+        } else {
+            return Err(ExpandError::EnvvarReadError(envvar.to_string()));
+        };
+
+        println!("found envvar: {envvar_value:?}");
+
+        let mut range_to_replace = full_match.range();
+        range_to_replace.start = range_to_replace.start.saturating_add_signed(total_offset);
+        range_to_replace.end = range_to_replace.end.saturating_add_signed(total_offset);
+        // this should never overflow because WHY would you be using this on a string with 2.1
+        // BILLION characters??
+        let old_len = isize::try_from(expanded.len())
+            .unwrap_or_else(|err| panic!("failed to cast usize -> isize: {err:?}"));
+        eprintln!("expanded={expanded:?} ({})", expanded.len());
+        expanded.replace_range(dbg!(range_to_replace.clone()), &envvar_value);
+        let new_len = isize::try_from(expanded.len())
+            .unwrap_or_else(|err| panic!("failed to cast usize -> isize: {err:?}"));
+        total_offset += new_len - old_len;
+    }
+
+    Ok(expanded)
+}
+
 /// Convert a `&str` slice into a `PathBuf`, expanding envvars and the leading tilde `~`, if it
 /// is there.
 ///
@@ -140,7 +204,7 @@ pub fn expand_by_path_components<S: AsRef<str>>(s: S) -> Result<PathBuf, ExpandE
          * 3. The fallback value
          *    (.*?)
          */
-        Regex::new(r"\$\{?([a-zA-Z_]\w*)(:-(.*?))?\}?$").expect("invalid envvar regex")
+        Regex::new(r"^\$\{?([a-zA-Z_]\w*)(:-(.*?))?\}?$").expect("invalid envvar regex")
     });
 
     let s = s.as_ref();
@@ -212,20 +276,82 @@ mod tests {
     const TEST_ENVVAR_KEY: &str = "__SHELLEXPAND_TEST_ENVVAR";
     const TEST_ENVVAR_VALUE: &str = "test_value";
 
-    fn set_test_envvar() -> anyhow::Result<String> {
+    fn set_and_check_envvar<K: AsRef<OsStr>, V: AsRef<OsStr>>(
+        key: K,
+        in_value: V,
+    ) -> anyhow::Result<String> {
+        let key = key.as_ref();
+        let in_value = in_value.as_ref();
         let test_envvar_value = unsafe {
-            std::env::set_var(TEST_ENVVAR_KEY, TEST_ENVVAR_VALUE);
-            let value = std::env::var(TEST_ENVVAR_KEY)
-                .context("failed to get test envvar after setting")?;
+            std::env::set_var(key, in_value);
+            let out_value =
+                std::env::var_os(key).context("failed to get test envvar after setting")?;
             assert_eq!(
-                TEST_ENVVAR_VALUE, value,
-                "failed to set {TEST_ENVVAR_KEY}={TEST_ENVVAR_VALUE}, got '{value}' instead."
+                in_value, out_value,
+                "failed to set {key:?}={in_value:?}, got '{out_value:?}' instead."
             );
 
-            value
+            out_value
         };
 
-        Ok(test_envvar_value)
+        Ok(test_envvar_value.to_string_lossy().to_string())
+    }
+
+    fn set_test_envvar() -> anyhow::Result<String> {
+        set_and_check_envvar(TEST_ENVVAR_KEY, TEST_ENVVAR_VALUE)
+    }
+
+    #[test]
+    fn test_expand_string_error() -> anyhow::Result<()> {
+        const BAD_KEY: &str = "NO_WAY_YOU_HAVE_DEFINED_THIS";
+        set_test_envvar().context("failed to set test envvar")?;
+        let test_str = format!("expand this: ${{{BAD_KEY}}}");
+
+        match expand(&test_str) {
+            Ok(_) => anyhow::bail!("expansion succeeded unexpectedly"),
+            Err(ExpandError::EnvvarReadError(envvar)) if envvar == BAD_KEY => Ok(()),
+            Err(err) => anyhow::bail!(err),
+        }
+    }
+
+    #[test]
+    fn test_expand_string_fallback() -> anyhow::Result<()> {
+        set_test_envvar().context("failed to set test envvar")?;
+        let expected = format!("expand this: {TEST_ENVVAR_VALUE}");
+        let test_str =
+            format!("expand this: ${{NO_WAY_YOU_HAVE_DEFINED_THIS:-${TEST_ENVVAR_KEY}}}");
+
+        let actual = expand(&test_str).context("failed to expand test string")?;
+        assert_eq!(expected, actual);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_expand_multiple_string() -> anyhow::Result<()> {
+        const TEST_KEY2: &str = "__TEST_KEY2";
+        const TEST_VALUE2: &str = "test value2";
+        set_test_envvar().context("failed to set test envvar")?;
+        set_and_check_envvar(TEST_KEY2, TEST_VALUE2).context("failed to set test envvar2")?;
+        let expected = format!("expand this: {TEST_ENVVAR_VALUE} {TEST_VALUE2}");
+        let test_str = format!("expand this: ${{{TEST_ENVVAR_KEY}}} ${{{TEST_KEY2}}}");
+
+        let actual = expand(&test_str).context("failed to expand test string")?;
+        assert_eq!(expected, actual);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_expand_string() -> anyhow::Result<()> {
+        set_test_envvar().context("failed to set test envvar")?;
+        let expected = format!("expand this: {TEST_ENVVAR_VALUE}");
+        let test_str = format!("expand this: ${{{TEST_ENVVAR_KEY}}}");
+
+        let actual = expand(&test_str).context("failed to expand test string")?;
+        assert_eq!(expected, actual);
+
+        Ok(())
     }
 
     #[test]
