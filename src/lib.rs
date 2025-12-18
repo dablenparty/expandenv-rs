@@ -159,7 +159,7 @@ pub fn expand<S: AsRef<str>>(s: S) -> Result<PathBuf, ExpandError> {
             #[cfg(debug_assertions)]
             println!("expanding envvar '{envvar:?}'");
 
-            let envvar_value = if let Some(value) = std::env::var_os(envvar) {
+            if let Some(value) = std::env::var_os(envvar) {
                 #[cfg(debug_assertions)]
                 println!("{envvar:?}={}", value.display());
 
@@ -172,31 +172,32 @@ pub fn expand<S: AsRef<str>>(s: S) -> Result<PathBuf, ExpandError> {
                 expand(fallback)?.into_os_string()
             } else {
                 return Err(ExpandError::EnvvarReadError(envvar.to_string()));
-            };
-
-            PathBuf::from(envvar_value)
+            }
         } else {
-            PathBuf::from(comp)
+            comp
         }; // if let Some(captures) = ...
-        expanded_comps.extend(path.components().map(|c| c.as_os_str().to_os_string()));
+        expanded_comps.push_back(path);
     } // for comp in comp_strs
 
     #[cfg(debug_assertions)]
     println!("comps={expanded_comps:?}");
 
-    if let Some(front) = expanded_comps.front() {
-        if front.as_os_str() == OsStr::new("~") {
-            let home = BASE_DIRS.home_dir();
-            expanded_comps.pop_front();
-            for comp in PathBuf::from(home).components().rev() {
-                expanded_comps.push_front(comp.as_os_str().to_os_string());
-            }
+    if let Some(front) = expanded_comps.front()
+        && front.as_os_str() == OsStr::new("~")
+    {
+        let home = BASE_DIRS.home_dir();
+        expanded_comps.pop_front();
+        for comp in PathBuf::from(home).components().rev() {
+            expanded_comps.push_front(comp.as_os_str().to_os_string());
         }
     }
 
     // WARN: there is currently a bug with [`PathBuf::from_iter`] where, for whatever reason, it combines the first two components into one.
     // Converting to a string seems to work fine for now.
-    let path_str = expanded_comps.into_iter().collect::<Vec<_>>().join(OsStr::new(std::path::MAIN_SEPARATOR_STR));
+    let path_str = expanded_comps
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(OsStr::new(std::path::MAIN_SEPARATOR_STR));
     Ok(PathBuf::from(path_str))
 }
 
