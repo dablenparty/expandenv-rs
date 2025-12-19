@@ -207,7 +207,7 @@ mod tests {
 
     use super::*;
 
-    const TEST_ENVVAR_KEY: &str = "__SHELLEXPAND_TEST_ENVVAR";
+    const TEST_ENVVAR_KEY: &str = "__EXPANDENV_TEST_VAR";
     const TEST_ENVVAR_VALUE: &str = "test_value";
 
     fn set_test_envvar() -> anyhow::Result<String> {
@@ -230,60 +230,35 @@ mod tests {
     fn test_fails_to_expand_non_existent_envvar() {
         const TEST_ENVVAR: &str = "NO_WAY_YOU_HAVE_DEFINED_THIS";
 
-        match expand(format!("${TEST_ENVVAR}/some/file")) {
+        match expand(format!("${TEST_ENVVAR}")) {
             Err(ExpandError::EnvvarReadError(envvar)) => assert_eq!(envvar, TEST_ENVVAR),
             res => panic!("expected error, got {res:?}"),
         }
     }
 
     #[test]
-    fn test_parses_path_with_braces() {
-        #[cfg(windows)]
-        let expected = vec!["${within\\braces}", "file"];
-        #[cfg(not(windows))]
-        let expected = vec!["${within/braces}", "file"];
-        let path = expected.join(std::path::MAIN_SEPARATOR_STR);
-        let actual = __parse_path_components_with_braces(&path);
+    fn test_parses_string_with_braces() {
+        let expected = vec!["this is a ", "${within braces}", " file"];
+        let expected_str = expected.join("");
+        let actual = __parse_path_components_with_braces(&expected_str);
 
         assert_eq!(expected, actual);
     }
 
     #[test]
-    fn test_parses_path_with_braces_but_no_dollar_sign() {
-        let expected = vec!["{within", "braces}", "file"];
-        let path = expected.join(std::path::MAIN_SEPARATOR_STR);
-        let actual = __parse_path_components_with_braces(&path);
+    fn test_parses_string_with_braces_but_no_dollar_sign() {
+        let expected = vec!["this is a {within braces} file"];
+        let expected_str = expected.join("");
+        let actual = __parse_path_components_with_braces(&expected_str);
 
         assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn test_expand_tilde() -> anyhow::Result<()> {
-        let home = BASE_DIRS.home_dir();
-        let expected = home.join("path").join("to").join("file");
-        let actual = expand("~/path/to/file")?;
-
-        assert_eq!(expected, actual);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_expand_absolute_path() -> anyhow::Result<()> {
-        let home = BASE_DIRS.home_dir();
-        let expected = home.join("path").join("to").join("file");
-        let actual = expand(expected.to_string_lossy())?;
-
-        assert_eq!(expected, actual);
-
-        Ok(())
     }
 
     #[test]
     fn test_expand_envvar() -> anyhow::Result<()> {
         set_test_envvar().context("failed to set test envvar")?;
-        let expected = PathBuf::from(format!("{TEST_ENVVAR_VALUE}/some/file"));
-        let actual = expand(format!("${TEST_ENVVAR_KEY}/some/file"))?;
+        let expected = TEST_ENVVAR_VALUE.to_string();
+        let actual = expand(format!("${TEST_ENVVAR_KEY}"))?;
 
         assert_eq!(expected, actual);
 
@@ -291,7 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn test_expand_envvar_in_middle() -> anyhow::Result<()> {
+    fn test_expand_envvar_in_middle_of_path() -> anyhow::Result<()> {
         set_test_envvar().context("failed to set test envvar")?;
 
         let expected = PathBuf::from(format!("path/to/{TEST_ENVVAR_VALUE}/some/file"));
@@ -305,8 +280,8 @@ mod tests {
     #[test]
     fn test_expand_envvar_with_braces() -> anyhow::Result<()> {
         set_test_envvar().context("failed to set test envvar")?;
-        let expected = PathBuf::from(format!("{TEST_ENVVAR_VALUE}/some/file"));
-        let actual = expand(format!("${{{TEST_ENVVAR_KEY}}}/some/file"))?;
+        let expected = TEST_ENVVAR_VALUE.to_string();
+        let actual = expand(format!("${{{TEST_ENVVAR_KEY}}}"))?;
 
         assert_eq!(expected, actual);
 
@@ -316,9 +291,9 @@ mod tests {
     #[test]
     fn test_expand_fallback_envvar() -> anyhow::Result<()> {
         set_test_envvar().context("failed to set test envvar")?;
-        let expected = PathBuf::from(format!("{TEST_ENVVAR_VALUE}/some/file"));
+        let expected = TEST_ENVVAR_VALUE.to_string();
         let actual = expand(format!(
-            "${{NO_WAY_YOU_HAVE_DEFINED_THIS:-${TEST_ENVVAR_KEY}}}/some/file"
+            "${{NO_WAY_YOU_HAVE_DEFINED_THIS:-${TEST_ENVVAR_KEY}}}"
         ))?;
 
         assert_eq!(expected, actual);
@@ -329,34 +304,11 @@ mod tests {
     #[test]
     fn test_expand_nested_fallback_envvars() -> anyhow::Result<()> {
         set_test_envvar().context("failed to set test envvar")?;
-        let expected = PathBuf::from(format!("{TEST_ENVVAR_VALUE}/some/file"));
+        let expected = TEST_ENVVAR_VALUE.to_string();
         // braces are important! otherwise, it's ambiguous
         let actual = expand(format!(
-            "${{MISSING1:-${{MISSING2:-${{MISSING3:-${TEST_ENVVAR_KEY}}}}}}}/some/file"
+            "${{MISSING1:-${{MISSING2:-${{MISSING3:-${TEST_ENVVAR_KEY}}}}}}}"
         ))?;
-
-        assert_eq!(expected, actual);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_expand_fallback_tilde() -> anyhow::Result<()> {
-        let home = BASE_DIRS.home_dir();
-        let expected = home.join("some").join("file");
-        let actual = expand("${NO_WAY_YOU_HAVE_DEFINED_THIS:-~}/some/file")?;
-
-        assert_eq!(expected, actual);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_fallback_has_tilde_components() -> anyhow::Result<()> {
-        let home = BASE_DIRS.home_dir();
-        let expected = home.join(home).join("some").join("file");
-
-        let actual = expand("${NO_WAY_YOU_HAVE_DEFINED_THIS:-~/some}/file")?;
 
         assert_eq!(expected, actual);
 
