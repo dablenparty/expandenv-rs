@@ -10,7 +10,4 @@ readme = "README.md"
 [dependencies]
 anyhow = "1.0.98"
 bstr = "1.12.1"
-directories-next = "2.0.0"
-fancy-regex = "0.17.0"
-regex = "1.11.1"
 thiserror = "2.0.12"

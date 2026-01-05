@@ -7,7 +7,6 @@ values.
 
 ```rust
 # use anyhow::{self, Context};
-# use directories_next;
 # use std::path::PathBuf;
 # use expandenv::expand;
 #
@@ -39,31 +38,35 @@ let envvar_value = expand("${MISSING_VAR:-some/path}")?;
 let envvar_value = expand("${MISSING_VAR:-${ANOTHER_MISSING_VAR:-$FOO}}")?;
 # assert_eq!(test_envvar_value, envvar_value);
 
-// it's not limited; you can expand an entire path!
-// the `~` expands to your home directory for simplicity
-let path = expand("~/${MISSING_VAR:-$FOO}/file.txt")?;
-# let base_dirs = directories_next::BaseDirs::new().context("failed to find home dir")?;
-# let home = base_dirs.home_dir();
-# assert_eq!(home.join(TEST_ENVVAR_VALUE).join("file.txt"), path);
+# let test_envvar_value2 = unsafe {
+#     std::env::set_var("BAR", "baz");
+#     let value = std::env::var("BAR").context("failed to set test envvar")?;
+#     assert_eq!(
+#         value, "baz",
+#         "failed to set BAR=baz, got '{value}' instead."
+#     );
+#
+#     value
+# };
+// it's not limited; you can expand an entire string!
+let expanded_str = expand("holy mackerel there's a ${MISSING_VAR:-$FOO} and even a $BAR!!")?;
+# assert_eq!(
+#   format!("holy mackerel there's a {} and even a {test_envvar_value2}!!", test_envvar_value.display()),
+#   expanded_str
+# );
 #
 # Ok(())
 # }
 ```
 */
 
-use std::{path::PathBuf, sync::LazyLock};
+use std::env;
 
 use bstr::{BString, ByteSlice, ByteVec};
-use directories_next::BaseDirs;
-use regex::Regex;
 
 use crate::errors::ExpandError;
 
 pub mod errors;
-
-/// Lazy wrapper around [`directories_next::BaseDirs::new`].
-static BASE_DIRS: LazyLock<BaseDirs> =
-    LazyLock::new(|| BaseDirs::new().expect("failed to locate users home directory"));
 
 /// Mimic's the behavior of [`PathBuf::components`] by extracting environment variables as their
 /// own components in a [`Vec<BString>`].
@@ -79,13 +82,23 @@ fn __parse_string_components<B: AsRef<[u8]>>(s: B) -> Vec<BString> {
     let mut components = vec![];
     let mut current_component = BString::new(vec![]);
     let mut parse_as_envvar = false;
+    let mut char_iter = s.chars().peekable();
 
-    for c in s.chars() {
+    while let Some(c) = char_iter.next() {
         match c {
-            '$' => {
-                // start of envvar, save current component
-                components.push(current_component.clone());
-                current_component.clear();
+            '\\' => {
+                // escape next character
+                if let Some(c) = char_iter.next() {
+                    current_component.push_char(c);
+                }
+                continue;
+            }
+            '$' if !parse_as_envvar && char_iter.peek().is_none_or(|c| *c != '$') => {
+                if !current_component.is_empty() {
+                    // start of envvar, save current component
+                    components.push(current_component.clone());
+                    current_component.clear();
+                }
                 current_component.push_char(c);
                 parse_as_envvar = true;
                 continue;
@@ -104,11 +117,13 @@ fn __parse_string_components<B: AsRef<[u8]>>(s: B) -> Vec<BString> {
             }
             '}' if parse_as_envvar => brace_count = brace_count.saturating_sub(1),
 
-            c if parse_as_envvar && brace_count == 0 && !c.is_alphanumeric() => {
-                // end of envvar without braces, save as component
-                current_component.push_char(c);
+            c if parse_as_envvar && brace_count == 0 && !(c.is_alphanumeric() || c == '_') => {
+                // end of envvar without braces, add braces and save as component
+                current_component.insert_char(1, '{');
+                current_component.push_char('c');
                 components.push(current_component.clone());
                 current_component.clear();
+                current_component.push_char(c);
                 parse_as_envvar = false;
                 continue;
             }
@@ -119,22 +134,22 @@ fn __parse_string_components<B: AsRef<[u8]>>(s: B) -> Vec<BString> {
         current_component.push_char(c);
     }
 
-    components.push(current_component);
+    if !current_component.is_empty() {
+        components.push(current_component);
+    }
 
     components
 }
 
-/// Convert a `&str` slice into a `PathBuf`, expanding envvars and the leading tilde `~`, if it
-/// is there.
-///
-/// The tilde (`~`) expands into the users home directory as defined by [`directories_next::BaseDirs::home_dir`].
+/// Parse through a byte slice, expanding envvars along the way.
 ///
 /// Environment variables expand into their value, optionally expanding a fallback value if the var
 /// cannot be read. Envvars may contain letters, numbers, and underscores (`_`), but they _must_ start
 /// with either a letter or an underscore after the dollar sign (`$`). Although more complicated
 /// syntax is technically allowed by most programming languages, I will not be supporting anything
 /// other than this basic structure because this is what most shells support and if you're doing
-/// something different, ask yourself why.
+/// something different, ask yourself why. A dollar sign followed by another dollar sign (`$$`) or
+/// preceded by a backslash is escaped. Both are supported for compatibility.
 ///
 /// # Arguments
 ///
@@ -145,41 +160,55 @@ fn __parse_string_components<B: AsRef<[u8]>>(s: B) -> Vec<BString> {
 /// An error is returned if:
 ///
 /// - An envvar cannot be expanded
-/// - You don't have a home directory
-pub fn expand<S: AsRef<[u8]>>(s: S) -> Result<PathBuf, ExpandError> {
-    static ENVVAR_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-        /*
-         * Capture groups:
-         * "envvar": The environment variable name
-         * "fallback": The fallback value, in its entirety
-         */
-        Regex::new(r"(?<envvar>[a-zA-Z_]\w*)(?::-(?<fallback>.*?\}))?")
-            .expect("invalid envvar regex")
-    });
-
-    let bs = bstr::B(s.as_ref());
-    let comp_strs = __parse_string_components(bs);
+pub fn expand<S: AsRef<[u8]>>(s: S) -> Result<String, ExpandError> {
+    let s = s.as_ref();
+    let mut expanded_str = BString::new(Vec::with_capacity(s.len()));
+    let mut maybe_fallback = None;
+    let comp_strs = dbg!(__parse_string_components(s));
 
     for comp in comp_strs {
-        if !comp[0] == b'$' {
+        if comp.is_empty() || comp[0] != b'$' || comp[1] == b'$' {
+            expanded_str.push_str(comp);
             continue;
         }
 
-        let trimmed = if comp[1] == b'{' {
-            // remove surrounding ${...}
-            &comp[2..comp.len() - 1]
+        let envvar_name = if comp[1] == b'{' {
+            // remove a brace level
+            let inner = &comp[2..comp.len() - 1];
+            if let Some((envvar, fallback)) = inner.split_once_str(":-") {
+                maybe_fallback = Some(fallback.to_vec());
+                envvar
+            } else {
+                inner
+            }
         } else {
-            // remove $...
             &comp[1..]
         };
+
+        let str_to_add = match env::var(dbg!(envvar_name.to_os_str_lossy())) {
+            Ok(value) => value,
+            Err(env::VarError::NotPresent) if maybe_fallback.is_some() => {
+                // this is guarded
+                #[allow(clippy::missing_panics_doc)]
+                expand(maybe_fallback.as_ref().unwrap())?
+            }
+            Err(env::VarError::NotPresent) => {
+                return Err(ExpandError::EnvvarReadError(
+                    envvar_name.to_str_lossy().to_string(),
+                ));
+            }
+            Err(err) => return Err(err.into()),
+        };
+        expanded_str.push_str(str_to_add);
     }
 
-    // TODO: maybe fancy-regex crate for lookbehind?
-    todo!()
+    Ok(expanded_str.to_string())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use anyhow::Context;
 
     use super::*;
@@ -255,6 +284,26 @@ mod tests {
     }
 
     #[test]
+    fn test_ignore_envvar_with_braces_in_middle_of_string() -> anyhow::Result<()> {
+        let expected = format!("oh look! ${{{TEST_ENVVAR_KEY}}}! a wild envvar!");
+        let actual = expand(format!("oh look! \\${{{TEST_ENVVAR_KEY}}}! a wild envvar!"))?;
+
+        assert_eq!(expected, actual);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ignore_envvar_in_middle_of_string() -> anyhow::Result<()> {
+        let expected = format!("oh look! ${TEST_ENVVAR_KEY}! a wild envvar!");
+        let actual = expand(format!("oh look! \\${TEST_ENVVAR_KEY}! a wild envvar!"))?;
+
+        assert_eq!(expected, actual);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_expand_envvar_in_middle_of_string() -> anyhow::Result<()> {
         set_test_envvar().context("failed to set test envvar")?;
 
@@ -285,6 +334,16 @@ mod tests {
         let actual = expand(format!("${{{TEST_ENVVAR_KEY}}}"))?;
 
         assert_eq!(expected, actual);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_expand_fallback() -> anyhow::Result<()> {
+        const EXPECTED: &str = "/path/to/file";
+        let actual = expand(format!("${{NO_WAY_YOU_HAVE_DEFINED_THIS:-{EXPECTED}}}"))?;
+
+        assert_eq!(EXPECTED, actual);
 
         Ok(())
     }
