@@ -23,7 +23,7 @@ jobs:
         cargo-args: ['--release', '']
 
     container:
-      image: cimg/rust:1.88-node
+      image: cimg/rust:1.92-node
 
     steps:
     - uses: actions/checkout@v4
