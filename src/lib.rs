@@ -1,7 +1,6 @@
 #![warn(clippy::all, clippy::pedantic)]
 /*!
-This crate is for expanding environment variables and tilde's (`~`) with support for fallback
-values.
+This crate is for expanding environment variables in strings with support for fallback values.
 
 ## Examples
 
@@ -48,7 +47,7 @@ let envvar_value = expand("${MISSING_VAR:-${ANOTHER_MISSING_VAR:-$FOO}}")?;
 #
 #     value
 # };
-// it's not limited; you can expand an entire string!
+// here's where it shines: you can expand an entire string!
 let expanded_str = expand("holy mackerel there's a ${MISSING_VAR:-$FOO} and even a $BAR!!")?;
 # assert_eq!(
 #   format!("holy mackerel there's a {} and even a {test_envvar_value2}!!", test_envvar_value.display()),
@@ -148,12 +147,12 @@ fn __parse_string_components<B: AsRef<[u8]>>(s: B) -> Vec<BString> {
 /// with either a letter or an underscore after the dollar sign (`$`). Although more complicated
 /// syntax is technically allowed by most programming languages, I will not be supporting anything
 /// other than this basic structure because this is what most shells support and if you're doing
-/// something different, ask yourself why. A dollar sign followed by another dollar sign (`$$`) or
-/// preceded by a backslash is escaped. Both are supported for compatibility.
+/// something different, ask yourself why. A dollar sign preceded by a backslash (`\$`) is escaped
+/// and thus not expanded.
 ///
 /// # Arguments
 ///
-/// - `s`: String to expand and convert
+/// - `s`: String to expand
 ///
 /// # Errors
 ///
