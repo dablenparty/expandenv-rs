@@ -163,7 +163,7 @@ pub fn expand<S: AsRef<[u8]>>(s: S) -> Result<String, ExpandError> {
     let s = s.as_ref();
     let mut expanded_str = BString::new(Vec::with_capacity(s.len()));
     let mut maybe_fallback = None;
-    let comp_strs = dbg!(__parse_string_components(s));
+    let comp_strs = __parse_string_components(s);
 
     for comp in comp_strs {
         if comp.is_empty() || comp[0] != b'$' || comp[1] == b'$' {
@@ -184,7 +184,7 @@ pub fn expand<S: AsRef<[u8]>>(s: S) -> Result<String, ExpandError> {
             &comp[1..]
         };
 
-        let str_to_add = match env::var(dbg!(envvar_name.to_os_str_lossy())) {
+        let str_to_add = match env::var(envvar_name.to_os_str_lossy()) {
             Ok(value) => value,
             Err(env::VarError::NotPresent) if maybe_fallback.is_some() => {
                 // this is guarded
